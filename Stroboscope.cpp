@@ -1,64 +1,200 @@
-/*
-  This is a random file for testing purposes
-*/
-% program two unknown angles
-% solves a loop equation
-% written by Cooper Nelson
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
 
-clear
-dtr = pi/180; %degrees to radians conversion
+//prototypes
+struct Button;
+struct Knob;
 
-%enter known values -length, radians
+void updateButton(Button&);
+void updateKnob(Knob&);
+double calculatePeriod(int);
+void updateScreen();
 
-rk1 = 12;
-thetak1 = 190*dtr;
+bool changed = false;
 
-rk2 = 6;
-thetak2 = 40*dtr;
+//structure for button
+struct Button{
+  int pin;
+  unsigned long lastButtonPress = 0;
+  int state = 0;
+  Button(int p){
+    pin = p;
+    pinMode(pin,INPUT_PULLUP);
+  }
+};
 
-rua1 = 8;
-rua2 = 5;
+//structure for the knob
+struct Knob{
+  //pins
+  int CLK;
+  int DT;
+  //variables for knob
+  double counter = 0;
+  double increment = 1;
+  int currentStateCLK;
+  int lastStateCLK;
+  
+  Knob(int c, int d){
+    CLK = c;
+    DT = d;
+    pinMode(CLK, INPUT);
+    pinMode(DT, INPUT);
+    lastStateCLK = digitalRead(CLK);
+  }
+  
+};
 
-%step 0 collect knowns into single vector
-
-rkx = rk1*cos(thetak1) + rk2*cos(thetak2);
-
-rky = rk1*sin(thetak1) + rk2*sin(thetak2);
-
-rk = sqrt(rkx^2 +rky^2);
-
-thetak = atan2(rky,rkx);
-
-
-%step 4 solve a,b,c (quadratic)
-
-a = rua1^2 - rua2^2 - rk^2 + 2*rua2*rkx;
-
-b = -4*rua2*rky;
-
-c = rua1^2 - rua2^2 - rk^2 - 2*rua2*rkx;
-
-
-%step 5 solve for t (quadratic equation)
-
-tp = (-b+sqrt(b^2-4*a*c))/2*a;
-
-tm = (-b-sqrt(b^2-4*a*c))/2*a;
-
-
-%step 6 solve thetaua2
-
-thetaua2p = 2*atan(tp);
-thetaua2m = 2*atan(tm);
-
-%step 7 solve tor thetaua1
-
-thetaua1p = atan2((-rua2*sin(thetaua2p)-rky)/rua1, ...
-                  (-rua1*cos(thetaua2p)-rkx)/rua1);
-
-thetaua1m = atan2((-rua2*sin(thetaua2m)-rky)/rua1, ...
-                  (-rua1*cos(thetaua2m)-rkx)/rua1);
+void updateButton(Button& btn){
+    // Read the button state
+    bool btnState = digitalRead(btn.pin);
+  
+    //If we detect LOW signal, button is pressed
+    if (btnState == LOW) {
+      //if 50ms have passed since last LOW pulse, it means that the
+      //button has been pressed, released and pressed again
+      if (millis() - btn.lastButtonPress > 50) {
+        btn.state++;
+        changed = true;
+      }
+  
+      // Remember last button press event
+      btn.lastButtonPress = millis();
+    }
+  }
 
 
 
+void updateKnob(Knob& knob){
+  // Read the current state of CLK
+  knob.currentStateCLK = digitalRead(knob.CLK);
+  if (knob.currentStateCLK != knob.lastStateCLK  && knob.currentStateCLK == 1){
+      if (digitalRead(knob.DT) != knob.currentStateCLK) {
+        knob.counter -= knob.increment;
+      } else {
+        // Encoder is rotating CW so increment
+        knob.counter += knob.increment;
+      }
+      changed = true;
+    }
+  
+    // Remember last CLK state
+    knob.lastStateCLK = knob.currentStateCLK;
+  
+    if(knob.counter < 0){
+      knob.counter = 0;
+    }
+  }
 
+
+// gloabal stuff
+Adafruit_SSD1306 oled(128, 32, &Wire, -1);
+Knob knob1(6,7);
+Button knobButton(9);
+Button multiplierButton(4);
+
+unsigned long currentTime = 0;
+unsigned long pastTime = 0;
+bool ledOff = true;
+unsigned long interval = 0;
+
+void setup() {
+  
+  Serial.begin(9600);
+  
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    while (true);
+  }
+
+  //setting variables to make the screen look good
+  knob1.increment = 100;
+  multiplierButton.state = 1;
+  //initializing the screen
+  oled.setTextSize(1);
+  oled.setTextColor(1);
+  updateScreen();
+
+  //pin for led
+  pinMode(13,OUTPUT);
+  digitalWrite(13,0);
+}
+
+
+void loop() {
+  // get data from knobs
+  updateKnob(knob1);
+  updateButton(knobButton);
+  updateButton(multiplierButton);
+  
+  //update the knobs increment
+  if(knobButton.state > 4){
+    knobButton.state = 0;
+  }
+  if(knobButton.state <= 4){
+    knob1.increment = pow(10, 2-knobButton.state);
+  }
+
+  //limit the multipliers state
+  if(multiplierButton.state > 10){
+    multiplierButton.state = 1;
+  }
+  
+  //draw on the screen
+  if(changed == true ){
+    changed = false;
+    updateScreen();
+  }
+  
+  //flashing the led
+  if(ledOff == false){
+    interval = calculatePeriod(knob1.counter)/multiplierButton.state;
+  }else{
+    interval = calculatePeriod(knob1.counter)/360;
+  }
+  currentTime = micros();
+  if(currentTime-pastTime > interval){
+    pastTime = currentTime;
+    if(interval == 0){
+      digitalWrite(13,0);
+    }else{
+      digitalWrite(13,!ledOff);
+    }
+    ledOff = !ledOff;
+  }
+  
+}
+
+double calculatePeriod(double c){
+  double x = pow(c,-1);
+  x = x * 1000000;
+  return x;
+}
+
+void updateScreen(){
+  //each character is 7 pixels tall
+  String str;
+  oled.clearDisplay();
+  
+  str = "Hz:";
+  str += knob1.counter;
+  oled.setCursor(0,0);
+  oled.print(str);
+  
+  str = "Increment: ";
+  str+= knob1.increment;
+  oled.setCursor(0,11);
+  oled.print(str);
+
+  str = "Multiplier: ";
+  str += multiplierButton.state;
+  oled.setCursor(0,22);
+  oled.print(str);
+
+  str = "           :";
+  str += (knob1.counter*multiplierButton.state);
+  oled.setCursor(0,0);
+  oled.print(str);
+  
+  oled.display();
+
+}
